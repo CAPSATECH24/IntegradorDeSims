@@ -71,7 +71,6 @@ default_mappings = {
     }
 }
 
-
 def create_database(db_path):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -88,7 +87,6 @@ def create_database(db_path):
     ''')
     conn.commit()
     conn.close()
-
 
 # Función para insertar datos en la base de datos con manejo de duplicados
 def insert_data(db_path, data):
@@ -107,7 +105,6 @@ def insert_data(db_path, data):
         return len(data), records_inserted
     finally:
         conn.close()
-
 
 # Función para limpiar ICCID, TELEFONO y ConsumoMb manteniendo ceros a la izquierda
 def clean_iccid_telefono_consumo(data):
@@ -147,7 +144,6 @@ def clean_iccid_telefono_consumo(data):
         logging.info(f"Limpieza Registro: ICCID '{original_iccid}' a '{cleaned_row[0]}', TELEFONO '{original_telefono}' a '{cleaned_row[1]}', ConsumoMb '{original_consumo_mb}' a '{cleaned_row[4]}'")
     return cleaned_data
 
-
 # Función para normalizar otros campos
 def normalize_data(data):
     normalized_data = []
@@ -158,10 +154,8 @@ def normalize_data(data):
         normalized_data.append(tuple(cleaned_row))
     return normalized_data
 
-
 # Función para procesar archivos Excel
 def process_excel(excel_file, column_mapping, sheet_name):
-    # Reiniciar el puntero del archivo
     excel_file.seek(0)
     workbook = openpyxl.load_workbook(excel_file, data_only=True)
     sheet = workbook[sheet_name]
@@ -190,7 +184,6 @@ def process_excel(excel_file, column_mapping, sheet_name):
         except IndexError:
             st.warning(f"Error procesando fila en la pestaña '{sheet_name}' del archivo '{excel_file.name}'. Fila omitida.")
     return all_data
-
 
 # Función para procesar archivos CSV
 def process_csv(csv_file, column_mapping):
@@ -222,7 +215,6 @@ def process_csv(csv_file, column_mapping):
             st.warning(f"Error procesando fila {index + 1} en el archivo CSV '{csv_file.name}'. Fila omitida.")
     return all_data
 
-
 # Función auxiliar para la selección manual de columnas
 def get_column_selection(columns, label, key):
     selection = st.selectbox(
@@ -232,7 +224,6 @@ def get_column_selection(columns, label, key):
         key=key
     )
     return selection
-
 
 # Interfaz de usuario con Streamlit
 st.title("Carga de Excel y CSV y Homologación de Base de Datos")
@@ -297,7 +288,6 @@ if uploaded_files:
                         }
                         logging.info(f"Archivo: {file.name} | Pestaña: {sheet_name} | Mapeo Manual: {sheet_data[sheet_name]}")
                 else:
-                    # Para pestañas no predefinidas
                     header_row = list(next(workbook[sheet_name].iter_rows(min_row=1, max_row=1, values_only=True)))
                     st.write("Selecciona las columnas correspondientes para cada campo requerido:")
                     iccid_col = get_column_selection(header_row, "Selecciona columna para ICCID:", f"{file.name}_{sheet_name}_iccid")
@@ -439,5 +429,15 @@ if uploaded_files:
                         st.metric("Registros Insertados", inserted)
                     with col3:
                         st.metric("Tasa de Inserción", f"{insertion_rate:.2f}%")
+                        
+        # Botón para descargar la base de datos resultante
+        with open(db_path, "rb") as f:
+            db_data = f.read()
+        st.download_button(
+            label="Descargar Base de Datos",
+            data=db_data,
+            file_name=os.path.basename(db_path),
+            mime="application/octet-stream"
+        )
 else:
     st.error("Por favor, sube al menos un archivo Excel o CSV.")
