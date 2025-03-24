@@ -1,4 +1,4 @@
-import openpyxl
+import openpyxl 
 import pandas as pd
 import sqlite3
 import re
@@ -6,19 +6,23 @@ import os
 import streamlit as st
 import logging
 from io import BytesIO
+from datetime import date
 
 # Configuración básica de logging
 logging.basicConfig(level=logging.INFO, filename='procesamiento.log', filemode='w',
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Nombre del archivo de salida con la fecha de hoy
+output_filename = f"dei Sims ({date.today().strftime('%Y-%m-%d')}).db"
+
 # Mapeos predeterminados basados en el nombre de la pestaña
 default_mappings = {
     "SIMPATIC": {
-        'ICCID': 'iccid',
-        'TELEFONO': 'msisdn',
-        'ESTADO DEL SIM': 'status',
-        'EN SESION': 'status',
-        'ConsumoMb': 'consumo en Mb'  
+        'ICCID': 'ICCID',
+        'TELEFONO': 'MSISDN',
+        'ESTADO DEL SIM': 'Fecha Vencimiento',
+        'EN SESION': 'Fecha Vencimiento',
+        'ConsumoMb': 'Fecha Vencimiento'
     },
     "TELCEL ALEJANDRO": {
         'ICCID': 'ICCID',
@@ -42,11 +46,11 @@ default_mappings = {
         'ConsumoMb': 'Uso de ciclo hasta la fecha (MB)'  
     },
     "TELCEL": {
-        'ICCID': 'ICCID',
-        'TELEFONO': 'MSISDN',
-        'ESTADO DEL SIM': 'ESTADO SIM',
-        'EN SESION': 'SESIÓN',
-        'ConsumoMb': 'LÍMITE DE USO DE DATOS' 
+        'ICCID': 'Cuenta Padre',
+        'TELEFONO': 'Línea',
+        'ESTADO DEL SIM': 'Estatus línea',
+        'EN SESION': 'Estatus línea',
+        'ConsumoMb': 'Motivo línea' 
     },
     "MOVISTAR": {
         'ICCID': 'ICC',
@@ -58,16 +62,16 @@ default_mappings = {
     "NANTI": {
         'ICCID': 'ICCID',
         'TELEFONO': 'MSISDN',
-        'ESTADO DEL SIM': 'STATUS',
-        'EN SESION': 'STATUS',
-        'ConsumoMb': 'Plan Original'  
+        'ESTADO DEL SIM': 'Estado',
+        'EN SESION': 'Estado',
+        'ConsumoMb': 'Estado'
     },
     "LEGACY": {
         'ICCID': 'ICCID',
-        'TELEFONO': 'TELEFONO',
-        'ESTADO DEL SIM': 'Estatus',
-        'EN SESION': 'Estatus',
-        'ConsumoMb': 'BSP Nacional'  
+        'TELEFONO': 'normalized_key',
+        'ESTADO DEL SIM': 'ESTADO_DEL_SIM',
+        'EN SESION': 'EN_SESION',
+        'ConsumoMb': 'ConsumoMb'
     }
 }
 
@@ -154,10 +158,9 @@ def normalize_data(data):
         normalized_data.append(tuple(cleaned_row))
     return normalized_data
 
-# Función para procesar archivos Excel
-def process_excel(excel_file, column_mapping, sheet_name):
-    excel_file.seek(0)
-    workbook = openpyxl.load_workbook(excel_file, data_only=True)
+# Función para procesar archivos Excel (usando file bytes)
+def process_excel(file_bytes, column_mapping, sheet_name):
+    workbook = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
     sheet = workbook[sheet_name]
     all_data = []
     header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
@@ -182,19 +185,18 @@ def process_excel(excel_file, column_mapping, sheet_name):
             row_data.append(sheet_name)  # Añadir el nombre de la pestaña como 'Compania'
             all_data.append(row_data)
         except IndexError:
-            st.warning(f"Error procesando fila en la pestaña '{sheet_name}' del archivo '{excel_file.name}'. Fila omitida.")
+            st.warning(f"Error procesando fila en la pestaña '{sheet_name}'. Fila omitida.")
     return all_data
 
-# Función para procesar archivos CSV
-def process_csv(csv_file, column_mapping):
+# Función para procesar archivos CSV (usando file bytes)
+def process_csv(file_bytes, column_mapping):
     try:
-        csv_file.seek(0)
-        df = pd.read_csv(csv_file, dtype=str)
+        df = pd.read_csv(BytesIO(file_bytes), dtype=str)
     except Exception as e:
-        logging.error(f"Error leyendo CSV '{csv_file.name}': {e}")
+        logging.error(f"Error leyendo CSV: {e}")
         return []
     all_data = []
-    company_name = os.path.splitext(csv_file.name)[0]
+    company_name = "CSV"  # Se puede ajustar si se desea usar otro identificador
     for index, row in df.iterrows():
         try:
             row_data = []
@@ -212,10 +214,10 @@ def process_csv(csv_file, column_mapping):
             row_data.append(company_name)
             all_data.append(row_data)
         except KeyError:
-            st.warning(f"Error procesando fila {index + 1} en el archivo CSV '{csv_file.name}'. Fila omitida.")
+            st.warning(f"Error procesando fila {index + 1} en el archivo CSV. Fila omitida.")
     return all_data
 
-# Función auxiliar para la selección manual de columnas
+# Función auxiliar para permitir la selección manual de columnas
 def get_column_selection(columns, label, key):
     selection = st.selectbox(
         label,
@@ -228,30 +230,22 @@ def get_column_selection(columns, label, key):
 # Interfaz de usuario con Streamlit
 st.title("Carga de Excel y CSV y Homologación de Base de Datos")
 
-# Subir archivos a través de la interfaz
-uploaded_files = st.file_uploader("Sube archivos Excel o CSV:", type=["xlsx", "csv"], accept_multiple_files=True)
-
-# Ruta para almacenar la base de datos (se usa un valor por defecto)
-default_db_path = "sims_hoy.db"
-db_path = st.text_input("Ingresa la ruta (o nombre) para almacenar la base de datos:", value=default_db_path)
+# Permitir que el usuario suba archivos directamente
+uploaded_files = st.file_uploader("Carga los archivos Excel o CSV:", accept_multiple_files=True, type=["xlsx", "csv"])
 
 if uploaded_files:
-    st.write("Archivos subidos:")
-    for file in uploaded_files:
-        st.write("-", file.name)
-    
-    # Diccionario para almacenar mapeos de columnas
-    column_mapping = {}
+    st.write(f"Archivos cargados: {[file.name for file in uploaded_files]}")
+    column_mapping = {}  # Almacenará el mapeo para cada archivo
 
-    # Para cada archivo subido se configura el mapeo de columnas
+    # Para cada archivo cargado se crea un mapeo de columnas
     for file in uploaded_files:
+        file_bytes = file.getvalue()
         sheet_data = {}
         if file.name.endswith('.xlsx'):
-            file.seek(0)
-            workbook = openpyxl.load_workbook(file, data_only=True)
+            workbook = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
             for sheet_name in workbook.sheetnames:
                 st.header(f"Archivo: {file.name} | Pestaña: {sheet_name}")
-                header_row = list(next(workbook[sheet_name].iter_rows(min_row=1, max_row=1, values_only=True)))
+                header_row = next(workbook[sheet_name].iter_rows(min_row=1, max_row=1, values_only=True))
                 if sheet_name in default_mappings:
                     mapping = default_mappings[sheet_name]
                     mapping_indices = {}
@@ -273,67 +267,66 @@ if uploaded_files:
                         st.info(f"Usando mapeo predeterminado para la pestaña '{sheet_name}' del archivo '{file.name}'.")
                         logging.info(f"Archivo: {file.name} | Pestaña: {sheet_name} | Mapeo: {mapping_indices}")
                     else:
+                        columns = [cell if cell is not None else "" for cell in header_row]
                         st.write("Selecciona las columnas correspondientes para cada campo requerido:")
-                        iccid_col = get_column_selection(header_row, "Selecciona columna para ICCID:", f"{file.name}_{sheet_name}_iccid")
-                        telefono_col = get_column_selection(header_row, "Selecciona columna para TELEFONO:", f"{file.name}_{sheet_name}_telefono")
-                        estado_sim_col = get_column_selection(header_row, "Selecciona columna para ESTADO DEL SIM:", f"{file.name}_{sheet_name}_estado_sim")
-                        en_sesion_col = get_column_selection(header_row, "Selecciona columna para EN SESION:", f"{file.name}_{sheet_name}_en_sesion")
-                        consumo_mb_col = get_column_selection(header_row, "Selecciona columna para ConsumoMb:", f"{file.name}_{sheet_name}_consumo_mb")
+                        iccid_col = get_column_selection(columns, label="Selecciona columna para ICCID:", key=f"{file.name}_{sheet_name}_iccid")
+                        telefono_col = get_column_selection(columns, label="Selecciona columna para TELEFONO:", key=f"{file.name}_{sheet_name}_telefono")
+                        estado_sim_col = get_column_selection(columns, label="Selecciona columna para ESTADO DEL SIM:", key=f"{file.name}_{sheet_name}_estado_sim")
+                        en_sesion_col = get_column_selection(columns, label="Selecciona columna para EN SESION:", key=f"{file.name}_{sheet_name}_en_sesion")
+                        consumo_mb_col = get_column_selection(columns, label="Selecciona columna para ConsumoMb:", key=f"{file.name}_{sheet_name}_consumo_mb")
                         sheet_data[sheet_name] = {
-                            'ICCID': header_row.index(iccid_col),
-                            'TELEFONO': header_row.index(telefono_col),
-                            'ESTADO DEL SIM': header_row.index(estado_sim_col),
-                            'EN SESION': header_row.index(en_sesion_col),
-                            'ConsumoMb': header_row.index(consumo_mb_col) if consumo_mb_col in header_row else -1
+                            'ICCID': columns.index(iccid_col),
+                            'TELEFONO': columns.index(telefono_col),
+                            'ESTADO DEL SIM': columns.index(estado_sim_col),
+                            'EN SESION': columns.index(en_sesion_col),
+                            'ConsumoMb': columns.index(consumo_mb_col) if consumo_mb_col in columns else -1
                         }
                         logging.info(f"Archivo: {file.name} | Pestaña: {sheet_name} | Mapeo Manual: {sheet_data[sheet_name]}")
                 else:
-                    header_row = list(next(workbook[sheet_name].iter_rows(min_row=1, max_row=1, values_only=True)))
+                    columns = [cell if cell is not None else "" for cell in next(workbook[sheet_name].iter_rows(min_row=1, max_row=1, values_only=True))]
                     st.write("Selecciona las columnas correspondientes para cada campo requerido:")
-                    iccid_col = get_column_selection(header_row, "Selecciona columna para ICCID:", f"{file.name}_{sheet_name}_iccid")
-                    telefono_col = get_column_selection(header_row, "Selecciona columna para TELEFONO:", f"{file.name}_{sheet_name}_telefono")
-                    estado_sim_col = get_column_selection(header_row, "Selecciona columna para ESTADO DEL SIM:", f"{file.name}_{sheet_name}_estado_sim")
-                    en_sesion_col = get_column_selection(header_row, "Selecciona columna para EN SESION:", f"{file.name}_{sheet_name}_en_sesion")
-                    consumo_mb_col = get_column_selection(header_row, "Selecciona columna para ConsumoMb:", f"{file.name}_{sheet_name}_consumo_mb")
+                    iccid_col = get_column_selection(columns, label="Selecciona columna para ICCID:", key=f"{file.name}_{sheet_name}_iccid")
+                    telefono_col = get_column_selection(columns, label="Selecciona columna para TELEFONO:", key=f"{file.name}_{sheet_name}_telefono")
+                    estado_sim_col = get_column_selection(columns, label="Selecciona columna para ESTADO DEL SIM:", key=f"{file.name}_{sheet_name}_estado_sim")
+                    en_sesion_col = get_column_selection(columns, label="Selecciona columna para EN SESION:", key=f"{file.name}_{sheet_name}_en_sesion")
+                    consumo_mb_col = get_column_selection(columns, label="Selecciona columna para ConsumoMb:", key=f"{file.name}_{sheet_name}_consumo_mb")
                     sheet_data[sheet_name] = {
-                        'ICCID': header_row.index(iccid_col),
-                        'TELEFONO': header_row.index(telefono_col),
-                        'ESTADO DEL SIM': header_row.index(estado_sim_col),
-                        'EN SESION': header_row.index(en_sesion_col),
-                        'ConsumoMb': header_row.index(consumo_mb_col) if consumo_mb_col in header_row else -1
+                        'ICCID': columns.index(iccid_col),
+                        'TELEFONO': columns.index(telefono_col),
+                        'ESTADO DEL SIM': columns.index(estado_sim_col),
+                        'EN SESION': columns.index(en_sesion_col),
+                        'ConsumoMb': columns.index(consumo_mb_col) if consumo_mb_col in columns else -1
                     }
                     logging.info(f"Archivo: {file.name} | Pestaña: {sheet_name} | Mapeo Manual: {sheet_data[sheet_name]}")
-            column_mapping[file.name] = sheet_data
         elif file.name.endswith('.csv'):
-            file.seek(0)
-            df = pd.read_csv(file, dtype=str)
+            df = pd.read_csv(BytesIO(file.getvalue()), dtype=str)
             columns = df.columns.tolist()
-            st.header(f"Archivo CSV: {file.name}")
+            st.header(f"Archivo: {file.name}")
             st.write("Selecciona las columnas correspondientes para cada campo requerido:")
-            iccid_col = get_column_selection(columns, "Selecciona columna para ICCID:", f"{file.name}_iccid")
-            telefono_col = get_column_selection(columns, "Selecciona columna para TELEFONO:", f"{file.name}_telefono")
-            estado_sim_col = get_column_selection(columns, "Selecciona columna para ESTADO DEL SIM:", f"{file.name}_estado_sim")
-            en_sesion_col = get_column_selection(columns, "Selecciona columna para EN SESION:", f"{file.name}_en_sesion")
-            consumo_mb_col = get_column_selection(columns, "Selecciona columna para ConsumoMb:", f"{file.name}_consumo_mb")
-            mapping = {
+            iccid_col = get_column_selection(columns, label="Selecciona columna para ICCID:", key=f"{file.name}_iccid")
+            telefono_col = get_column_selection(columns, label="Selecciona columna para TELEFONO:", key=f"{file.name}_telefono")
+            estado_sim_col = get_column_selection(columns, label="Selecciona columna para ESTADO DEL SIM:", key=f"{file.name}_estado_sim")
+            en_sesion_col = get_column_selection(columns, label="Selecciona columna para EN SESION:", key=f"{file.name}_en_sesion")
+            consumo_mb_col = get_column_selection(columns, label="Selecciona columna para ConsumoMb:", key=f"{file.name}_consumo_mb")
+            sheet_data[file.name] = {
                 'ICCID': df.columns.get_loc(iccid_col),
                 'TELEFONO': df.columns.get_loc(telefono_col),
                 'ESTADO DEL SIM': df.columns.get_loc(estado_sim_col),
                 'EN SESION': df.columns.get_loc(en_sesion_col),
                 'ConsumoMb': df.columns.get_loc(consumo_mb_col) if consumo_mb_col in df.columns else -1
             }
-            column_mapping[file.name] = mapping
-            logging.info(f"Archivo: {file.name} | CSV | Mapeo Manual: {mapping}")
+            logging.info(f"Archivo: {file.name} | CSV | Mapeo Manual: {sheet_data[file.name]}")
+        column_mapping[file.name] = sheet_data
 
     # Vista previa del mapeo de columnas
     st.subheader("Vista Previa de Mapeo de Columnas")
     for file in uploaded_files:
+        file_bytes = file.getvalue()
         if file.name.endswith('.xlsx'):
-            file.seek(0)
-            workbook = openpyxl.load_workbook(file, data_only=True)
+            workbook = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
             for sheet, mapping in column_mapping[file.name].items():
                 st.write(f"**Archivo:** {file.name} | **Pestaña:** {sheet}")
-                header_row = list(next(workbook[sheet].iter_rows(min_row=1, max_row=1, values_only=True)))
+                header_row = next(workbook[sheet].iter_rows(min_row=1, max_row=1, values_only=True))
                 st.write(f" - ICCID: {header_row[mapping['ICCID']]}")
                 st.write(f" - TELEFONO: {header_row[mapping['TELEFONO']]}")
                 st.write(f" - ESTADO DEL SIM: {header_row[mapping['ESTADO DEL SIM']]}")
@@ -343,8 +336,7 @@ if uploaded_files:
                 else:
                     st.write(" - ConsumoMb: No mapeado")
         elif file.name.endswith('.csv'):
-            file.seek(0)
-            df = pd.read_csv(file, dtype=str)
+            df = pd.read_csv(BytesIO(file.getvalue()), dtype=str)
             mapping = column_mapping[file.name]
             st.write(f"**Archivo CSV:** {file.name}")
             st.write(f" - ICCID: {df.columns[mapping['ICCID']]}")
@@ -358,59 +350,104 @@ if uploaded_files:
     
     # Botón para procesar todos los archivos subidos
     if st.button("Procesar Todos los Archivos"):
-        create_database(db_path)
-        logging.info(f"Base de datos creada o existente: {db_path}")
-
-        all_data = []
+        all_mappings_valid = True
+        stats_by_file = {}
         total_records = 0
         total_inserted = 0
-        stats_by_file = {}
 
+        # Validación de mapeos
         for file in uploaded_files:
+            file_bytes = file.getvalue()
             if file.name.endswith('.xlsx'):
-                file.seek(0)
-                workbook = openpyxl.load_workbook(file, data_only=True)
+                workbook = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
                 stats_by_file[file.name] = {'sheets': {}}
                 for sheet_name in workbook.sheetnames:
-                    data = process_excel(file, column_mapping[file.name][sheet_name], sheet_name)
+                    num_columns = workbook[sheet_name].max_column
+                    for key in ['ICCID', 'TELEFONO', 'ESTADO DEL SIM', 'EN SESION', 'ConsumoMb']:
+                        if key == 'ConsumoMb' and column_mapping[file.name][sheet_name][key] == -1:
+                            st.warning(f"La columna 'ConsumoMb' no está mapeada para la pestaña '{sheet_name}' del archivo '{file.name}'. Se establecerá como NULL.")
+                        elif key != 'ConsumoMb' and not (0 <= column_mapping[file.name][sheet_name][key] < num_columns):
+                            st.error(f"Mapeo inválido para '{key}' en la pestaña '{sheet_name}' del archivo '{file.name}'.")
+                            all_mappings_valid = False
+            elif file.name.endswith('.csv'):
+                df = pd.read_csv(BytesIO(file.getvalue()), dtype=str)
+                mapping = column_mapping[file.name]
+                num_columns = len(df.columns)
+                for key in ['ICCID', 'TELEFONO', 'ESTADO DEL SIM', 'EN SESION', 'ConsumoMb']:
+                    if key == 'ConsumoMb' and mapping[key] == -1:
+                        st.warning(f"La columna 'ConsumoMb' no está mapeada para el archivo CSV '{file.name}'. Se establecerá como NULL.")
+                    elif key != 'ConsumoMb' and not (0 <= mapping[key] < num_columns):
+                        st.error(f"Mapeo inválido para '{key}' en el archivo CSV '{file.name}'.")
+                        all_mappings_valid = False
+
+        if not all_mappings_valid:
+            st.error("Por favor, revisa los mapeos de columnas y corrige los errores antes de proceder.")
+        else:
+            # Elimina el archivo de BD si existe para que cada ejecución sea independiente
+            if os.path.exists(output_filename):
+                os.remove(output_filename)
+                logging.info(f"Archivo existente {output_filename} eliminado para nueva ejecución.")
+            
+            create_database(output_filename)
+            logging.info(f"Base de datos creada: {output_filename}")
+
+            for file in uploaded_files:
+                file_bytes = file.getvalue()
+                if file.name.endswith('.xlsx'):
+                    workbook = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
+                    stats_by_file[file.name] = {'sheets': {}}
+                    for sheet_name in workbook.sheetnames:
+                        data = process_excel(file_bytes, column_mapping[file.name][sheet_name], sheet_name)
+                        if data:
+                            processed, inserted = insert_data(output_filename, data)
+                            stats_by_file[file.name]['sheets'][sheet_name] = {
+                                'processed': processed,
+                                'inserted': inserted
+                            }
+                            total_records += processed
+                            total_inserted += inserted
+                elif file.name.endswith('.csv'):
+                    data = process_csv(file_bytes, column_mapping[file.name])
                     if data:
-                        processed, inserted = insert_data(db_path, data)
-                        stats_by_file[file.name]['sheets'][sheet_name] = {
+                        processed, inserted = insert_data(output_filename, data)
+                        stats_by_file[file.name] = {
                             'processed': processed,
                             'inserted': inserted
                         }
                         total_records += processed
                         total_inserted += inserted
-            elif file.name.endswith('.csv'):
-                file.seek(0)
-                data = process_csv(file, column_mapping[file.name])
-                if data:
-                    processed, inserted = insert_data(db_path, data)
-                    stats_by_file[file.name] = {
-                        'processed': processed,
-                        'inserted': inserted
-                    }
-                    total_records += processed
-                    total_inserted += inserted
 
-        # Mostrar estadísticas en pestañas
-        tab1, tab2 = st.tabs(["Proceso", "Estadísticas"])
-        with tab1:
-            st.success("¡Procesamiento completado!")
-            st.write(f"Total de registros procesados: {total_records}")
-            st.write(f"Total de registros insertados: {total_inserted}")
-        with tab2:
-            st.header("Estadísticas de Procesamiento")
-            if total_records > 0:
-                st.write(f"Tasa de inserción total: {(total_inserted/total_records*100):.2f}%")
-            for file, stats in stats_by_file.items():
-                st.subheader(f"Archivo: {file}")
-                if 'sheets' in stats:  # Archivo Excel
-                    for sheet, sheet_stats in stats['sheets'].items():
-                        processed = sheet_stats['processed']
-                        inserted = sheet_stats['inserted']
+            # Mostrar resultados en pestañas
+            tab1, tab2 = st.tabs(["Proceso", "Estadísticas"])
+            
+            with tab1:
+                st.success("¡Procesamiento completado!")
+                st.write(f"Total de registros procesados: {total_records}")
+                st.write(f"Total de registros insertados: {total_inserted}")
+                
+            with tab2:
+                st.header("Estadísticas de Procesamiento")
+                if total_records > 0:
+                    st.write(f"Tasa de inserción total: {(total_inserted/total_records*100):.2f}%")
+                for file_name, stats in stats_by_file.items():
+                    st.subheader(f"Archivo: {file_name}")
+                    if 'sheets' in stats:  # Archivo Excel
+                        for sheet, sheet_stats in stats['sheets'].items():
+                            processed = sheet_stats['processed']
+                            inserted = sheet_stats['inserted']
+                            insertion_rate = (inserted/processed*100) if processed > 0 else 0
+                            st.write(f"Pestaña: {sheet}")
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Registros Procesados", processed)
+                            with col2:
+                                st.metric("Registros Insertados", inserted)
+                            with col3:
+                                st.metric("Tasa de Inserción", f"{insertion_rate:.2f}%")
+                    else:  # Archivo CSV
+                        processed = stats['processed']
+                        inserted = stats['inserted']
                         insertion_rate = (inserted/processed*100) if processed > 0 else 0
-                        st.write(f"Pestaña: {sheet}")
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric("Registros Procesados", processed)
@@ -418,26 +455,15 @@ if uploaded_files:
                             st.metric("Registros Insertados", inserted)
                         with col3:
                             st.metric("Tasa de Inserción", f"{insertion_rate:.2f}%")
-                else:  # Archivo CSV
-                    processed = stats['processed']
-                    inserted = stats['inserted']
-                    insertion_rate = (inserted/processed*100) if processed > 0 else 0
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Registros Procesados", processed)
-                    with col2:
-                        st.metric("Registros Insertados", inserted)
-                    with col3:
-                        st.metric("Tasa de Inserción", f"{insertion_rate:.2f}%")
-                        
-        # Botón para descargar la base de datos resultante
-        with open(db_path, "rb") as f:
-            db_data = f.read()
-        st.download_button(
-            label="Descargar Base de Datos",
-            data=db_data,
-            file_name=os.path.basename(db_path),
-            mime="application/octet-stream"
-        )
+            
+            # Se ofrece para descarga la base de datos generada
+            with open(output_filename, "rb") as f:
+                db_bytes = f.read()
+            st.download_button(
+                label="Descargar Base de Datos",
+                data=db_bytes,
+                file_name=output_filename,
+                mime="application/octet-stream"
+            )
 else:
     st.error("Por favor, sube al menos un archivo Excel o CSV.")
